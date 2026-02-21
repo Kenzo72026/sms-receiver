@@ -21,56 +21,64 @@ logger = logging.getLogger(__name__)
 def webhook_recevoir_sms(request):
     """
     Endpoint webhook - reçoit les SMS depuis l'app Transitaire SMS (Android).
-    Compatible avec SMS Forwarder, SMS to URL, AutoSMS et autres apps similaires.
-
-    URL à mettre dans l'app : http://VOTRE_IP:8000/webhook/sms/
-
-    Formats acceptés (POST) :
-      - JSON : {"from": "+33612345678", "message": "Bonjour", "sentStamp": 1700000000}
-      - Form data : from=+33612345678&message=Bonjour&sentStamp=1700000000
+    Accepte GET et POST, JSON, form-data, et paramètres URL.
     """
-    if request.method != 'POST':
+    # Accepte GET et POST
+    if request.method not in ('POST', 'GET'):
         return JsonResponse({'status': 'error', 'message': 'Méthode non autorisée'}, status=405)
 
-    # Vérification token optionnelle
-    token = request.GET.get('token') or request.headers.get('X-Auth-Token')
-    if settings.SMS_WEBHOOK_TOKEN and token != settings.SMS_WEBHOOK_TOKEN:
-        # Pas de token = on accepte quand même (pour faciliter la config initiale)
-        # Pour forcer la sécurité, décommenter la ligne ci-dessous :
-        # return JsonResponse({'status': 'error', 'message': 'Token invalide'}, status=403)
-        pass
+    # Fusionner toutes les sources de données : GET params + POST body
+    data = {}
 
-    # Lecture des données (JSON ou form)
+    # 1. Paramètres GET (query string dans l'URL)
+    data.update(request.GET.dict())
+
+    # 2. POST body
     try:
-        if request.content_type and 'application/json' in request.content_type:
-            data = json.loads(request.body.decode('utf-8'))
-        else:
-            data = request.POST.dict()
-            if not data:
-                data = json.loads(request.body.decode('utf-8'))
-    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        if request.method == 'POST':
+            if request.content_type and 'application/json' in request.content_type:
+                body = json.loads(request.body.decode('utf-8'))
+                if isinstance(body, dict):
+                    data.update(body)
+            else:
+                data.update(request.POST.dict())
+                # Essai JSON si form vide
+                if not request.POST and request.body:
+                    try:
+                        body = json.loads(request.body.decode('utf-8'))
+                        if isinstance(body, dict):
+                            data.update(body)
+                    except Exception:
+                        pass
+    except Exception as e:
         logger.error(f"Erreur décodage webhook: {e}")
-        return JsonResponse({'status': 'error', 'message': 'Corps de requête invalide'}, status=400)
 
-    # Extraction des champs (compatibilité multi-apps)
+    # Log pour debug
+    logger.info(f"Webhook reçu — données brutes: {data}")
+
+    # Extraction expéditeur (tous les noms de champs possibles)
     expediteur = (
-        data.get('from') or
-        data.get('sender') or
-        data.get('number') or
-        data.get('phone') or
-        'Inconnu'
+        data.get('from') or data.get('sender') or data.get('number') or
+        data.get('phone') or data.get('from_number') or data.get('phonenumber') or
+        data.get('msisdn') or data.get('originator') or 'Inconnu'
     )
+
+    # Extraction contenu (tous les noms de champs possibles)
     contenu = (
-        data.get('message') or
-        data.get('msg') or
-        data.get('body') or
-        data.get('text') or
-        data.get('sms') or
-        ''
+        data.get('message') or data.get('msg') or data.get('body') or
+        data.get('text') or data.get('sms') or data.get('content') or
+        data.get('sms_message') or data.get('smscontent') or data.get('messagetext') or
+        data.get('message_text') or data.get('sms_body') or ''
     )
 
     if not contenu:
-        return JsonResponse({'status': 'error', 'message': 'Message vide'}, status=400)
+        # Log ce qui a été reçu pour aider au débogage
+        logger.warning(f"Message vide reçu. Données: {data}")
+        return JsonResponse({
+            'status': 'error',
+            'message': 'Message vide',
+            'recu': list(data.keys())
+        }, status=400)
 
     # Date d'envoi depuis le téléphone
     date_telephone = None
