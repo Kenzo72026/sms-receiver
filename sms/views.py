@@ -29,13 +29,10 @@ def extraire_infos_sms(contenu):
         'numero_envoyeur': None,
         'nom_envoyeur': None,
     }
-
-    # Transfer ID (ex: Transfer-Id: 59808713)
     m = re.search(r'Transfer-Id[:\s]+(\d+)', contenu, re.IGNORECASE)
     if m:
         infos['transfer_id'] = m.group(1)
 
-    # Montant (ex: Received DJF 100 from)
     m = re.search(r'Received\s+([\w\s]+?)\s+from', contenu, re.IGNORECASE)
     if m:
         infos['montant'] = m.group(1).strip()
@@ -43,7 +40,6 @@ def extraire_infos_sms(contenu):
         if num:
             infos['montant_num'] = num.group(1)
 
-    # Nom et numéro (ex: Kenedid Yacin Boulaleh(77280597))
     m = re.search(r'from\s+([A-Za-z\s]+)\((\d+)\)', contenu, re.IGNORECASE)
     if m:
         infos['nom_envoyeur'] = m.group(1).strip()
@@ -65,14 +61,13 @@ def get_session():
         'Referer': f'{SITE_URL}/fr/admin/report/pendingrequestrefill',
     })
 
-    # Connexion
     try:
         login_resp = session.post(
             f'{SITE_URL}/api/auth/login',
             json={'username': SITE_USERNAME, 'password': SITE_PASSWORD},
             timeout=20
         )
-        logger.info(f"Login: {login_resp.status_code}")
+        logger.info(f"Login: {login_resp.status_code} - {login_resp.text[:100]}")
 
         if login_resp.status_code not in (200, 201):
             for endpoint in [
@@ -87,7 +82,6 @@ def get_session():
                 if login_resp.status_code in (200, 201):
                     break
 
-        # Récupérer token si présent
         try:
             login_data = login_resp.json()
             token = (
@@ -106,11 +100,12 @@ def get_session():
     return session
 
 
-def verifier_et_confirmer(transfer_id, montant, numero, confirmer=False):
+def verifier_et_confirmer_auto(transfer_id, montant, numero):
     """
-    1. Se connecte sur my-managment.com
+    Vérifie et confirme AUTOMATIQUEMENT dès qu'un SMS est reçu.
+    1. Connexion sur my-managment.com
     2. Cherche dans Pending deposit requests
-    3. Si trouve → appelle approvemoney automatiquement
+    3. Si correspond → appelle approvemoney automatiquement
     """
     session = get_session()
 
@@ -125,11 +120,10 @@ def verifier_et_confirmer(transfer_id, montant, numero, confirmer=False):
             f'{SITE_URL}/admin/banktransfer/pendingrequestrefill',
         ]
 
-        raw_response = ""
         for endpoint in endpoints_deposits:
             try:
                 resp = session.get(endpoint, timeout=20)
-                raw_response += f"\n{endpoint}: {resp.status_code}"
+                logger.info(f"Deposits {endpoint}: {resp.status_code} - {resp.text[:200]}")
                 if resp.status_code == 200:
                     try:
                         data = resp.json()
@@ -150,20 +144,19 @@ def verifier_et_confirmer(transfer_id, montant, numero, confirmer=False):
                 continue
 
         if not transactions:
-            return False, f"Aucune transaction récupérée. Endpoints testés: {raw_response}", {}
+            return False, "Aucune transaction récupérée du site", {}
 
         # Chercher la transaction correspondante
         montant_num = re.search(r'(\d+)', montant or '').group(1) if montant else None
 
         for t in transactions:
             t_str = json.dumps(t, ensure_ascii=False).lower()
-
             transfer_match = transfer_id and str(transfer_id) in t_str
             montant_match = montant_num and montant_num in t_str
             numero_match = numero and str(numero) in t_str
 
             if transfer_match or (montant_match and numero_match):
-                # Transaction trouvée — appeler approvemoney
+                # Récupérer les infos nécessaires pour approvemoney
                 transaction_id = (
                     t.get('id') or t.get('transaction_id') or
                     t.get('ID') or t.get('_id')
@@ -172,17 +165,14 @@ def verifier_et_confirmer(transfer_id, montant, numero, confirmer=False):
                     t.get('summa') or t.get('amount') or
                     t.get('montant') or montant_num or '0'
                 )
-                report_id = (
-                    t.get('report_id') or t.get('reportId') or
-                    t.get('report') or ''
-                )
+                report_id = t.get('report_id') or t.get('reportId') or ''
                 subagent_id = t.get('subagent_id', 34883)
                 currency = t.get('currency', 227)
 
                 if not transaction_id:
-                    return True, "Transaction trouvée mais ID manquant pour approvemoney", t
+                    return True, "Transaction trouvée mais ID manquant", t
 
-                # Appel à approvemoney
+                # Appel automatique à approvemoney
                 approve_resp = session.post(
                     f'{SITE_URL}/admin/banktransfer/approvemoney',
                     data={
@@ -201,20 +191,23 @@ def verifier_et_confirmer(transfer_id, montant, numero, confirmer=False):
                 logger.info(f"Approvemoney: {approve_resp.status_code} - {approve_resp.text[:200]}")
 
                 if approve_resp.status_code == 200:
-                    return True, f"✅ Transaction confirmée avec succès ! ID: {transaction_id}, Montant: {summa}", t
+                    return True, f"✅ Confirmé automatiquement ! ID:{transaction_id} Montant:{summa}", t
                 else:
-                    return False, f"Transaction trouvée mais erreur lors de la confirmation: {approve_resp.status_code} - {approve_resp.text[:100]}", t
+                    return False, f"Transaction trouvée mais erreur confirmation: {approve_resp.status_code}", t
 
-        return False, f"❌ Aucune transaction correspondante. Transfer-ID: {transfer_id}, Montant: {montant_num}, Numéro: {numero}. Total transactions: {len(transactions)}", {}
+        return False, f"❌ Pas de correspondance. Transfer-ID:{transfer_id} Montant:{montant_num} Numéro:{numero} ({len(transactions)} transactions)", {}
 
     except Exception as e:
-        logger.error(f"Erreur vérification: {e}")
+        logger.error(f"Erreur: {e}")
         return False, f"Erreur: {str(e)}", {}
 
 
 @csrf_exempt
 def webhook_recevoir_sms(request):
-    """Webhook - reçoit les SMS et extrait automatiquement les infos."""
+    """
+    Webhook - reçoit le SMS, extrait les infos ET vérifie/confirme AUTOMATIQUEMENT.
+    Pas besoin de cliquer sur quoi que ce soit !
+    """
     data = {}
     data.update(request.GET.dict())
     if request.method == 'POST':
@@ -250,6 +243,7 @@ def webhook_recevoir_sms(request):
     if not contenu:
         contenu = f"[Données: {json.dumps(data, ensure_ascii=False)}]"
 
+    # Extraire les infos du SMS WAAFI
     infos = extraire_infos_sms(contenu)
 
     ip_source = (
@@ -257,6 +251,7 @@ def webhook_recevoir_sms(request):
         request.META.get('REMOTE_ADDR')
     )
 
+    # Sauvegarder le SMS
     msg = Message.objects.create(
         expediteur=str(expediteur)[:50],
         contenu=contenu,
@@ -268,7 +263,19 @@ def webhook_recevoir_sms(request):
         statut_verification='non_verifie',
     )
 
-    logger.info(f"SMS ID={msg.id} transfer_id={infos.get('transfer_id')} montant={infos.get('montant')}")
+    # Si c'est un SMS WAAFI avec Transfer-ID → vérifier et confirmer automatiquement
+    if infos.get('transfer_id') or infos.get('numero_envoyeur'):
+        logger.info(f"SMS WAAFI détecté - vérification automatique...")
+        correspond, details, donnees_site = verifier_et_confirmer_auto(
+            infos.get('transfer_id'),
+            infos.get('montant'),
+            infos.get('numero_envoyeur')
+        )
+        msg.statut_verification = 'correspond' if correspond else 'non_trouve'
+        msg.details_verification = details
+        msg.save(update_fields=['statut_verification', 'details_verification'])
+        logger.info(f"Résultat auto: correspond={correspond} details={details}")
+
     return JsonResponse({'status': 'ok', 'id': msg.id}, status=201)
 
 
@@ -320,39 +327,9 @@ def api_messages(request):
     msgs = Message.objects.filter(id__gt=depuis_id).values(
         'id', 'expediteur', 'contenu', 'transfer_id', 'montant',
         'numero_envoyeur', 'nom_envoyeur', 'statut_verification',
-        'date_reception_telephone', 'date_reception_serveur', 'lu'
+        'details_verification', 'date_reception_serveur', 'lu'
     )[:50]
     return JsonResponse({'messages': list(msgs)})
-
-
-@login_required
-def verifier_transaction(request, pk):
-    """Vérifie et confirme automatiquement si les infos correspondent."""
-    msg = get_object_or_404(Message, pk=pk)
-
-    if not msg.transfer_id and not msg.numero_envoyeur:
-        return JsonResponse({
-            'status': 'error',
-            'message': 'Impossible d\'extraire les infos du SMS'
-        })
-
-    correspond, details, donnees_site = verifier_et_confirmer(
-        msg.transfer_id, msg.montant, msg.numero_envoyeur
-    )
-
-    msg.statut_verification = 'correspond' if correspond else 'non_trouve'
-    msg.details_verification = details
-    msg.save(update_fields=['statut_verification', 'details_verification'])
-
-    return JsonResponse({
-        'status': 'ok',
-        'correspond': correspond,
-        'transfer_id': msg.transfer_id,
-        'montant': msg.montant,
-        'numero': msg.numero_envoyeur,
-        'nom': msg.nom_envoyeur,
-        'details': details,
-    })
 
 
 def ping(request):
