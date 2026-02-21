@@ -119,10 +119,20 @@ def verifier_sur_site(transfer_id, montant, numero):
 
 @csrf_exempt
 def webhook_recevoir_sms(request):
-    """Webhook - reçoit les SMS et extrait automatiquement les infos."""
+    """
+    Webhook universel - accepte TOUT format envoyé par n'importe quelle app SMS.
+    URL : https://sms-receiver-0a3f.onrender.com/webhook/sms/
+    """
+
+    # ---- Collecte toutes les données de TOUTES les sources ----
     data = {}
+
+    # 1. Paramètres dans l'URL (?from=xxx&message=yyy)
     data.update(request.GET.dict())
+
+    # 2. Corps POST (JSON ou form-data)
     if request.method == 'POST':
+        # Essai JSON
         try:
             body_str = request.body.decode('utf-8').strip()
             if body_str:
@@ -131,38 +141,73 @@ def webhook_recevoir_sms(request):
                     data.update(parsed)
         except Exception:
             pass
+
+        # Essai form-data
         try:
             if request.POST:
                 data.update(request.POST.dict())
         except Exception:
             pass
 
-    logger.info(f"[WEBHOOK] donnees={json.dumps(data, ensure_ascii=False)[:500]}")
+    # Log complet pour debug
+    logger.info(f"[WEBHOOK] methode={request.method} content_type={request.content_type}")
+    logger.info(f"[WEBHOOK] donnees={json.dumps(data, ensure_ascii=False)}")
+    logger.info(f"[WEBHOOK] body_brut={request.body[:300]}")
 
+    # ---- Extraction expéditeur ----
     expediteur = (
         data.get('from') or data.get('sender') or data.get('number') or
-        data.get('phone') or 'Inconnu'
+        data.get('phone') or data.get('phonenumber') or data.get('msisdn') or
+        data.get('from_number') or data.get('source') or data.get('originator') or
+        'Inconnu'
     )
-    if expediteur and expediteur.startswith('{'):
+
+    # Ignorer les valeurs non substituées comme {sender}
+    if expediteur and expediteur.startswith('{') and expediteur.endswith('}'):
         expediteur = 'Inconnu'
 
+    # ---- Extraction contenu ----
     contenu = (
         data.get('message') or data.get('msg') or data.get('body') or
-        data.get('text') or data.get('sms') or data.get('key') or ''
+        data.get('text') or data.get('sms') or data.get('content') or
+        data.get('sms_message') or data.get('messagetext') or
+        data.get('message_text') or data.get('sms_body') or
+        data.get('Message') or data.get('Text') or data.get('Body') or ''
     )
-    if contenu and contenu.startswith('{'):
+
+    # Ignorer les valeurs non substituées
+    if contenu and contenu.startswith('{') and contenu.endswith('}'):
         contenu = ''
+
+    # Si toujours vide, sauvegarder quand même avec les données brutes
     if not contenu:
-        contenu = f"[Données: {json.dumps(data, ensure_ascii=False)}]"
+        contenu = f"[Données reçues: {json.dumps(data, ensure_ascii=False)}]"
 
-    # Extraire les infos du SMS
-    infos = extraire_infos_sms(contenu)
+    # ---- Date ----
+    date_telephone = None
+    ts_brut = (
+        data.get('sentStamp') or data.get('receivedStamp') or
+        data.get('timestamp') or data.get('date') or data.get('time')
+    )
+    if ts_brut:
+        try:
+            ts = int(str(ts_brut))
+            if ts > 9999999999:
+                ts = ts // 1000
+            date_telephone = datetime.fromtimestamp(ts, tz=timezone.utc)
+        except Exception:
+            pass
 
+    # ---- IP source ----
     ip_source = (
         request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or
         request.META.get('REMOTE_ADDR')
     )
 
+    # ---- Extraction infos SMS ----
+    infos = extraire_infos_sms(contenu)
+
+    # ---- Sauvegarde ----
     msg = Message.objects.create(
         expediteur=str(expediteur)[:50],
         contenu=contenu,
@@ -174,7 +219,7 @@ def webhook_recevoir_sms(request):
         statut_verification='non_verifie',
     )
 
-    logger.info(f"SMS sauvegardé ID={msg.id} transfer_id={infos['transfer_id']} montant={infos['montant']}")
+    logger.info(f"[WEBHOOK] SMS sauvegarde ID={msg.id} transfer_id={infos['transfer_id']} montant={infos['montant']} de={expediteur}")
     return JsonResponse({'status': 'ok', 'id': msg.id}, status=201)
 
 
