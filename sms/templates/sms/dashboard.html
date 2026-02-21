@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMS Receiver - Dashboard</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+  .header { background: #1e293b; border-bottom: 1px solid #334155; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 1.4rem; font-weight: 700; color: #38bdf8; }
+  .header h1 span { color: #64748b; font-weight: 400; font-size: 1rem; }
+
+  .badge { background: #ef4444; color: white; border-radius: 12px; padding: 2px 8px; font-size: 0.75rem; font-weight: 700; }
+  .badge.zero { background: #334155; color: #64748b; }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .stat-card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 20px; text-align: center; }
+  .stat-card .num { font-size: 2rem; font-weight: 700; color: #38bdf8; }
+  .stat-card .label { color: #64748b; font-size: 0.85rem; margin-top: 4px; }
+
+  .webhook-box { background: #0c2a3a; border: 1px solid #0369a1; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+  .webhook-box h3 { color: #38bdf8; margin-bottom: 10px; font-size: 0.95rem; }
+  .webhook-url { background: #0f172a; border: 1px solid #1d4ed8; border-radius: 8px; padding: 12px 16px; font-family: monospace; font-size: 0.9rem; color: #93c5fd; word-break: break-all; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .btn-copy { background: #1d4ed8; color: white; border: none; border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 0.8rem; white-space: nowrap; }
+  .btn-copy:hover { background: #2563eb; }
+  .webhook-hint { color: #64748b; font-size: 0.8rem; margin-top: 8px; }
+
+  .filters { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .filters input { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 8px 14px; color: #e2e8f0; font-size: 0.9rem; }
+  .filters input:focus { outline: none; border-color: #38bdf8; }
+  .btn { background: #1d4ed8; color: white; border: none; border-radius: 8px; padding: 8px 16px; cursor: pointer; font-size: 0.9rem; text-decoration: none; display: inline-block; }
+  .btn:hover { background: #2563eb; }
+  .btn.secondary { background: #334155; }
+  .btn.secondary:hover { background: #475569; }
+
+  .live-dot { width: 8px; height: 8px; background: #22c55e; border-radius: 50%; display: inline-block; animation: pulse 1.5s infinite; margin-right: 6px; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .messages-list { display: flex; flex-direction: column; gap: 10px; }
+  .msg-card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 16px 20px; transition: border-color 0.2s; cursor: pointer; display: block; text-decoration: none; color: inherit; }
+  .msg-card:hover { border-color: #38bdf8; }
+  .msg-card.unread { border-left: 3px solid #38bdf8; }
+  .msg-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .msg-from { font-weight: 600; color: #38bdf8; font-size: 0.95rem; }
+  .msg-date { color: #64748b; font-size: 0.8rem; }
+  .msg-body { color: #cbd5e1; line-height: 1.5; font-size: 0.92rem; }
+  .unread-dot { width: 8px; height: 8px; background: #38bdf8; border-radius: 50%; display: inline-block; margin-left: 8px; }
+
+  .empty { text-align: center; padding: 60px 20px; color: #64748b; }
+  .empty .icon { font-size: 3rem; margin-bottom: 16px; }
+
+  #notif { position: fixed; top: 16px; right: 16px; background: #16a34a; color: white; padding: 12px 20px; border-radius: 10px; font-size: 0.9rem; display: none; z-index: 1000; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📱 SMS Receiver <span>— Tableau de bord</span></h1>
+  <div style="display:flex;align-items:center;gap:12px;">
+    <span><span class="live-dot"></span> En direct</span>
+    <a href="/admin/" class="btn secondary" style="font-size:0.8rem;">Admin</a>
+    <a href="/admin/logout/" class="btn secondary" style="font-size:0.8rem;">Déconnexion</a>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat-card">
+      <div class="num">{{ total }}</div>
+      <div class="label">Total messages</div>
+    </div>
+    <div class="stat-card">
+      <div class="num" style="color:#ef4444;">{{ non_lus }}</div>
+      <div class="label">Non lus</div>
+    </div>
+    <div class="stat-card">
+      <div class="num" style="color:#22c55e;">{{ expediteurs|length }}</div>
+      <div class="label">Expéditeurs</div>
+    </div>
+  </div>
+
+  <!-- Webhook URL -->
+  <div class="webhook-box">
+    <h3>🔗 URL à configurer dans l'app Transitaire SMS</h3>
+    <div class="webhook-url">
+      <span id="webhook-url-text">{{ webhook_url }}</span>
+      <button class="btn-copy" onclick="copyUrl()">Copier</button>
+    </div>
+    <p class="webhook-hint">
+      Dans l'app SMS Forwarder / Transitaire SMS : colle cette URL dans le champ "URL" ou "Webhook URL".<br>
+      Champs attendus par l'app : <code style="color:#93c5fd;">from</code>, <code style="color:#93c5fd;">message</code>, <code style="color:#93c5fd;">sentStamp</code>
+    </p>
+  </div>
+
+  <!-- Filtres -->
+  <form method="get" class="filters">
+    <input type="text" name="expediteur" placeholder="Filtrer par numéro..." value="{{ filtre_expediteur }}">
+    <label style="display:flex;align-items:center;gap:6px;color:#94a3b8;">
+      <input type="checkbox" name="non_lu" value="1" {% if filtre_non_lu %}checked{% endif %}> Non lus seulement
+    </label>
+    <button type="submit" class="btn">Filtrer</button>
+    {% if filtre_expediteur or filtre_non_lu %}
+      <a href="/" class="btn secondary">Tout afficher</a>
+    {% endif %}
+  </form>
+
+  <!-- Liste des messages -->
+  <div class="messages-list" id="messages-list">
+    {% if messages %}
+      {% for msg in messages %}
+      <a href="/message/{{ msg.id }}/" class="msg-card {% if not msg.lu %}unread{% endif %}">
+        <div class="msg-header">
+          <span class="msg-from">
+            📞 {{ msg.expediteur }}
+            {% if not msg.lu %}<span class="unread-dot"></span>{% endif %}
+          </span>
+          <span class="msg-date">
+            {% if msg.date_reception_telephone %}
+              {{ msg.date_reception_telephone|date:"d/m/Y H:i" }}
+            {% else %}
+              Reçu le {{ msg.date_reception_serveur|date:"d/m/Y H:i" }}
+            {% endif %}
+          </span>
+        </div>
+        <div class="msg-body">{{ msg.contenu|truncatechars:160 }}</div>
+      </a>
+      {% endfor %}
+    {% else %}
+      <div class="empty">
+        <div class="icon">📭</div>
+        <p>Aucun message pour le moment.</p>
+        <p style="margin-top:8px;font-size:0.85rem;">Configure l'URL webhook dans ton app et les SMS arriveront ici automatiquement.</p>
+      </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<div id="notif">📩 Nouveau message reçu !</div>
+
+<script>
+function copyUrl() {
+  const url = document.getElementById('webhook-url-text').textContent;
+  navigator.clipboard.writeText(url).then(() => {
+    const btn = document.querySelector('.btn-copy');
+    btn.textContent = '✓ Copié !';
+    setTimeout(() => btn.textContent = 'Copier', 2000);
+  });
+}
+
+// Rafraîchissement automatique toutes les 5 secondes
+let dernierID = {{ messages.0.id|default:0 }};
+
+async function verifierNouveauxMessages() {
+  try {
+    const resp = await fetch('/api/messages/?depuis_id=' + dernierID);
+    const data = await resp.json();
+    if (data.messages && data.messages.length > 0) {
+      dernierID = data.messages[0].id;
+      afficherNotification(data.messages.length);
+      setTimeout(() => location.reload(), 1500);
+    }
+  } catch(e) {}
+}
+
+function afficherNotification(nb) {
+  const notif = document.getElementById('notif');
+  notif.textContent = '📩 ' + nb + ' nouveau(x) message(s) reçu(s) !';
+  notif.style.display = 'block';
+  setTimeout(() => notif.style.display = 'none', 4000);
+}
+
+setInterval(verifierNouveauxMessages, 5000);
+</script>
+</body>
+</html>

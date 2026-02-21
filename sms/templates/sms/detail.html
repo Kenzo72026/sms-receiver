@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Message de {{ msg.expediteur }}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+  .header { background: #1e293b; border-bottom: 1px solid #334155; padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
+  .header a { color: #38bdf8; text-decoration: none; font-size: 0.9rem; }
+  .header h1 { font-size: 1.2rem; font-weight: 600; }
+  .container { max-width: 800px; margin: 32px auto; padding: 0 24px; }
+  .card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 28px; }
+  .field { margin-bottom: 20px; }
+  .field label { color: #64748b; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 6px; }
+  .field .value { color: #e2e8f0; font-size: 1rem; }
+  .field .value.big { font-size: 1.1rem; line-height: 1.7; }
+  .field .value.mono { font-family: monospace; color: #38bdf8; font-size: 1.1rem; }
+  .divider { border: none; border-top: 1px solid #334155; margin: 20px 0; }
+  .actions { display: flex; gap: 12px; margin-top: 24px; }
+  .btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 0.9rem; text-decoration: none; display: inline-block; }
+  .btn.back { background: #334155; color: #e2e8f0; }
+  .btn.back:hover { background: #475569; }
+  .btn.danger { background: #7f1d1d; color: #fca5a5; }
+  .btn.danger:hover { background: #991b1b; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <a href="/">← Retour</a>
+  <h1>📩 Message de {{ msg.expediteur }}</h1>
+</div>
+
+<div class="container">
+  <div class="card">
+    <div class="field">
+      <label>Expéditeur</label>
+      <div class="value mono">{{ msg.expediteur }}</div>
+    </div>
+    <hr class="divider">
+    <div class="field">
+      <label>Contenu du message</label>
+      <div class="value big">{{ msg.contenu }}</div>
+    </div>
+    <hr class="divider">
+    <div class="field">
+      <label>Date de réception (téléphone)</label>
+      <div class="value">
+        {% if msg.date_reception_telephone %}
+          {{ msg.date_reception_telephone|date:"d/m/Y à H:i:s" }}
+        {% else %}
+          Non disponible
+        {% endif %}
+      </div>
+    </div>
+    <div class="field">
+      <label>Date de réception (serveur)</label>
+      <div class="value">{{ msg.date_reception_serveur|date:"d/m/Y à H:i:s" }}</div>
+    </div>
+    <div class="field">
+      <label>IP source</label>
+      <div class="value">{{ msg.source_ip|default:"Inconnue" }}</div>
+    </div>
+
+    <div class="actions">
+      <a href="/" class="btn back">← Retour à la liste</a>
+      <button class="btn danger" onclick="supprimer({{ msg.id }})">Supprimer</button>
+    </div>
+  </div>
+</div>
+
+<script>
+async function supprimer(id) {
+  if (!confirm('Supprimer ce message ?')) return;
+  await fetch('/message/' + id + '/supprimer/', { method: 'POST', headers: {'X-CSRFToken': getCookie('csrftoken')} });
+  window.location.href = '/';
+}
+
+function getCookie(name) {
+  const v = document.cookie.match('(^|;) ?' + name + '=([^;]*)(;|$)');
+  return v ? v[2] : null;
+}
+</script>
+</body>
+</html>
