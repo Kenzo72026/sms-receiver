@@ -25,15 +25,19 @@ def extraire_infos_sms(contenu):
         'nom_envoyeur': None,
     }
 
-    # Transfer ID
+    # Transfer ID (ex: Transfer-Id: 59808713)
     m = re.search(r'Transfer-Id[:\s]+(\d+)', contenu, re.IGNORECASE)
     if m:
         infos['transfer_id'] = m.group(1)
 
-    # Montant (ex: DJF 100)
+    # Montant (ex: Received DJF 100 from)
     m = re.search(r'Received\s+([\w\s]+?)\s+from', contenu, re.IGNORECASE)
     if m:
         infos['montant'] = m.group(1).strip()
+        # Extraire juste le nombre
+        num = re.search(r'(\d+)', infos['montant'])
+        if num:
+            infos['montant_num'] = num.group(1)
 
     # Nom et numéro (ex: Kenedid Yacin Boulaleh(77280597))
     m = re.search(r'from\s+([A-Za-z\s]+)\((\d+)\)', contenu, re.IGNORECASE)
@@ -46,75 +50,128 @@ def extraire_infos_sms(contenu):
 
 def verifier_sur_site(transfer_id, montant, numero):
     """
-    Se connecte sur my-managment.com et vérifie si la transaction correspond.
-    Retourne (correspond: bool, details: str, donnees_site: dict)
+    Se connecte sur my-managment.com et vérifie dans Pending deposit requests
+    si le Transfer-ID, montant et numéro correspondent.
     """
     session = requests.Session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json, text/plain, */*',
         'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest',
     })
 
     try:
-        # 1. Connexion
+        # 1. Connexion au site
+        logger.info("Tentative connexion my-managment.com...")
         login_resp = session.post(
             'https://my-managment.com/api/auth/login',
             json={'username': 'Waafi_Basta_Main', 'password': '82LMBJPT3t'},
-            timeout=15
+            timeout=20
         )
+        logger.info(f"Login response: {login_resp.status_code} - {login_resp.text[:200]}")
 
+        # Essai d'autres endpoints de login si le premier échoue
         if login_resp.status_code not in (200, 201):
-            # Essai avec un autre endpoint
-            login_resp = session.post(
-                'https://my-managment.com/api/signin',
-                json={'login': 'Waafi_Basta_Main', 'password': '82LMBJPT3t'},
-                timeout=15
+            for endpoint in [
+                'https://my-managment.com/api/login',
+                'https://my-managment.com/api/v1/auth/login',
+                'https://my-managment.com/signin',
+            ]:
+                try:
+                    login_resp = session.post(
+                        endpoint,
+                        json={'username': 'Waafi_Basta_Main', 'password': '82LMBJPT3t'},
+                        timeout=20
+                    )
+                    logger.info(f"Login {endpoint}: {login_resp.status_code}")
+                    if login_resp.status_code in (200, 201):
+                        break
+                except Exception:
+                    continue
+
+        # Récupérer le token si présent
+        try:
+            login_data = login_resp.json()
+            token = (
+                login_data.get('token') or
+                login_data.get('access_token') or
+                login_data.get('data', {}).get('token') or
+                login_data.get('data', {}).get('access_token')
             )
+            if token:
+                session.headers.update({'Authorization': f'Bearer {token}'})
+                logger.info(f"Token récupéré: {token[:20]}...")
+        except Exception:
+            pass
 
-        logger.info(f"Login status: {login_resp.status_code}")
-
-        # 2. Récupérer les pending deposits
-        endpoints = [
+        # 2. Récupérer les pending deposit requests
+        transactions = []
+        endpoints_deposits = [
             'https://my-managment.com/api/payment/pending-deposits',
             'https://my-managment.com/api/deposits/pending',
+            'https://my-managment.com/api/v1/deposits/pending',
             'https://my-managment.com/api/transactions/pending',
+            'https://my-managment.com/api/bank-transfers/pending',
+            'https://my-managment.com/api/v1/payment/pending',
         ]
 
-        transactions = []
-        for endpoint in endpoints:
+        raw_response = ""
+        for endpoint in endpoints_deposits:
             try:
-                resp = session.get(endpoint, timeout=15)
+                resp = session.get(endpoint, timeout=20)
+                logger.info(f"Deposits {endpoint}: {resp.status_code} - {resp.text[:300]}")
+                raw_response += f"\n{endpoint}: {resp.status_code} - {resp.text[:200]}"
                 if resp.status_code == 200:
                     data = resp.json()
-                    if isinstance(data, list):
+                    if isinstance(data, list) and len(data) > 0:
                         transactions = data
+                        break
                     elif isinstance(data, dict):
-                        transactions = data.get('data', data.get('items', data.get('transactions', [])))
+                        for key in ['data', 'items', 'transactions', 'deposits', 'list', 'results']:
+                            if key in data and isinstance(data[key], list):
+                                transactions = data[key]
+                                break
                     if transactions:
                         break
-            except Exception:
+            except Exception as e:
+                logger.error(f"Erreur endpoint {endpoint}: {e}")
                 continue
 
-        # 3. Chercher la transaction correspondante
+        if not transactions:
+            return False, f"Aucune transaction récupérée. Réponses API: {raw_response}", {}
+
+        # 3. Chercher la correspondance
+        # Sur le site: Transfer-ID est dans les infos utilisateur
+        # Colonnes: IDENTIFIANT DE LA TRANSACTION, MONTANT, INFOS SUR L'UTILISATEUR
         for t in transactions:
-            t_str = json.dumps(t).lower()
-            id_match = transfer_id and str(transfer_id) in t_str
-            montant_num = re.search(r'\d+', montant or '').group() if montant else None
+            t_str = json.dumps(t, ensure_ascii=False).lower()
+
+            # Vérifier Transfer-ID
+            transfer_match = transfer_id and str(transfer_id) in t_str
+
+            # Vérifier montant (juste le nombre)
+            montant_num = re.search(r'(\d+)', montant or '').group(1) if montant else None
             montant_match = montant_num and montant_num in t_str
+
+            # Vérifier numéro envoyeur
             numero_match = numero and str(numero) in t_str
 
-            if id_match or (montant_match and numero_match):
-                return True, f"Transaction trouvée : {json.dumps(t, ensure_ascii=False)}", t
+            logger.info(f"Transaction: transfer_match={transfer_match} montant_match={montant_match} numero_match={numero_match}")
 
-        if transactions:
-            return False, f"{len(transactions)} transactions trouvées mais aucune ne correspond", {}
-        else:
-            return False, "Impossible de récupérer les transactions du site", {}
+            # Correspondance si Transfer-ID ET (montant OU numéro) correspondent
+            if transfer_match and (montant_match or numero_match):
+                return True, f"✅ Transaction trouvée et vérifiée !", t
+
+            # Correspondance si montant ET numéro correspondent (sans Transfer-ID)
+            if montant_match and numero_match:
+                return True, f"✅ Transaction trouvée par montant et numéro !", t
+
+        return False, f"❌ Aucune transaction correspondante trouvée parmi {len(transactions)} transactions. Transfer-ID cherché: {transfer_id}, Montant: {montant}, Numéro: {numero}", {}
 
     except Exception as e:
-        logger.error(f"Erreur vérification site: {e}")
-        return False, f"Erreur de connexion au site: {str(e)}", {}
+        logger.error(f"Erreur vérification: {e}")
+        return False, f"Erreur de connexion: {str(e)}", {}
 
 
 @csrf_exempt
@@ -155,7 +212,7 @@ def webhook_recevoir_sms(request):
     if not contenu:
         contenu = f"[Données: {json.dumps(data, ensure_ascii=False)}]"
 
-    # Extraire les infos du SMS
+    # Extraire les infos du SMS WAAFI
     infos = extraire_infos_sms(contenu)
 
     ip_source = (
@@ -167,14 +224,14 @@ def webhook_recevoir_sms(request):
         expediteur=str(expediteur)[:50],
         contenu=contenu,
         source_ip=ip_source or None,
-        transfer_id=infos['transfer_id'],
-        montant=infos['montant'],
-        numero_envoyeur=infos['numero_envoyeur'],
-        nom_envoyeur=infos['nom_envoyeur'],
+        transfer_id=infos.get('transfer_id'),
+        montant=infos.get('montant'),
+        numero_envoyeur=infos.get('numero_envoyeur'),
+        nom_envoyeur=infos.get('nom_envoyeur'),
         statut_verification='non_verifie',
     )
 
-    logger.info(f"SMS sauvegardé ID={msg.id} transfer_id={infos['transfer_id']} montant={infos['montant']}")
+    logger.info(f"SMS ID={msg.id} transfer_id={infos.get('transfer_id')} montant={infos.get('montant')}")
     return JsonResponse({'status': 'ok', 'id': msg.id}, status=201)
 
 
@@ -233,13 +290,13 @@ def api_messages(request):
 
 @login_required
 def verifier_transaction(request, pk):
-    """Lance la vérification d'un SMS sur my-managment.com."""
+    """Lance la vérification d'un SMS sur my-managment.com Pending deposit requests."""
     msg = get_object_or_404(Message, pk=pk)
 
     if not msg.transfer_id and not msg.numero_envoyeur:
         return JsonResponse({
             'status': 'error',
-            'message': 'Impossible d\'extraire les infos du SMS'
+            'message': 'Impossible d\'extraire les infos du SMS (Transfer-ID et numéro manquants)'
         })
 
     correspond, details, donnees_site = verifier_sur_site(
