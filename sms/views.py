@@ -94,35 +94,26 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
     try:
         # Récupérer les transactions pending
         transactions = []
-        endpoints_deposits = [
-            f'{SITE_URL}/api/payment/pending-deposits',
-            f'{SITE_URL}/api/deposits/pending',
-            f'{SITE_URL}/api/v1/deposits/pending',
-            f'{SITE_URL}/fr/api/payment/pending-deposits',
-            f'{SITE_URL}/admin/banktransfer/pendingrequestrefill',
-            f'{SITE_URL}/api/banktransfer/list?status=pending',
-        ]
-
-        for endpoint in endpoints_deposits:
-            try:
-                resp = session.get(endpoint, timeout=20)
-                logger.info(f"GET {endpoint}: {resp.status_code} content-type={resp.headers.get('content-type','')}")
-                ct = resp.headers.get('content-type', '')
-                if resp.status_code == 200 and 'json' in ct:
-                    data = resp.json()
-                    if isinstance(data, list) and len(data) > 0:
-                        transactions = data
-                        break
-                    elif isinstance(data, dict):
-                        for key in ['data', 'items', 'transactions', 'deposits', 'list', 'results']:
-                            if key in data and isinstance(data[key], list) and len(data[key]) > 0:
-                                transactions = data[key]
-                                break
-                    if transactions:
-                        break
-            except Exception as e:
-                logger.error(f"Error {endpoint}: {e}")
-                continue
+        # URL exacte trouvée dans Network — POST avec body {init: 1}
+        try:
+            resp = session.post(
+                f'{SITE_URL}/admin/report/pendingrequestrefill',
+                json={'init': 1},
+                timeout=20
+            )
+            logger.info(f"pendingrequestrefill: {resp.status_code} - {resp.text[:300]}")
+            ct = resp.headers.get('content-type', '')
+            if resp.status_code == 200 and 'json' in ct:
+                data = resp.json()
+                if isinstance(data, list):
+                    transactions = data
+                elif isinstance(data, dict):
+                    for key in ['data', 'items', 'transactions', 'deposits', 'list', 'results']:
+                        if key in data and isinstance(data[key], list):
+                            transactions = data[key]
+                            break
+        except Exception as e:
+            logger.error(f"Error pendingrequestrefill: {e}")
 
         if not transactions:
             return False, f"⚠️ Connexion réussie mais aucune transaction récupérée — vérifiez les logs Render", {}
@@ -130,9 +121,12 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
         # Chercher la correspondance
         for t in transactions:
             t_str = json.dumps(t, ensure_ascii=False).lower()
-            transfer_match = transfer_id and str(transfer_id) in t_str
             montant_match = montant_num and montant_num in t_str
-            numero_match = numero and str(numero) in t_str
+            # Numéro SMS (ex: 77745772) préfixé par 253 dans le site (25377745772)
+            numero_court = numero[-8:] if numero and len(numero) >= 8 else numero
+            numero_match = numero_court and numero_court in t_str
+            # Transfer-ID du site dans les infos utilisateur
+            transfer_match = transfer_id and str(transfer_id) in t_str
 
             if transfer_match or (montant_match and numero_match):
                 transaction_id = (t.get('id') or t.get('transaction_id') or t.get('ID'))
