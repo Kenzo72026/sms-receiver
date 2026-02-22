@@ -121,14 +121,11 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
         # Chercher la correspondance
         for t in transactions:
             t_str = json.dumps(t, ensure_ascii=False).lower()
-            montant_match = montant_num and montant_num in t_str
-            # Numéro SMS (ex: 77745772) préfixé par 253 dans le site (25377745772)
-            numero_court = numero[-8:] if numero and len(numero) >= 8 else numero
-            numero_match = numero_court and numero_court in t_str
-            # Transfer-ID du site dans les infos utilisateur
+            # Vérification uniquement sur Transfer-ID ET Montant
             transfer_match = transfer_id and str(transfer_id) in t_str
+            montant_match = montant_num and montant_num in t_str
 
-            if transfer_match or (montant_match and numero_match):
+            if transfer_match and montant_match:
                 transaction_id = (t.get('id') or t.get('transaction_id') or t.get('ID'))
                 summa = t.get('summa') or t.get('amount') or montant_num or '0'
                 report_id = t.get('report_id') or t.get('reportId') or ''
