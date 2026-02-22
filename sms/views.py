@@ -15,9 +15,9 @@ from .models import Message
 
 logger = logging.getLogger(__name__)
 
-SITE_USERNAME = 'Waafi_Basta_Main'
-SITE_PASSWORD = '82LMBJPT3t'
 SITE_URL = 'https://my-managment.com'
+# Cookie de session - à mettre à jour si expiré
+SITE_COOKIE = 'lng=fr; auid=U5PNZGmZkZ07s+1QAwaPAg==; PHPSESSID=c81f6b610bfd21d6fd3e7d842dc5e0df'
 
 
 def extraire_infos_sms(contenu):
@@ -44,7 +44,7 @@ def extraire_infos_sms(contenu):
 
 
 def get_session():
-    """Crée une session authentifiée — utilise les cookies comme un vrai navigateur."""
+    """Utilise le cookie de session directement — pas besoin de login."""
     session = requests.Session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0',
@@ -54,35 +54,8 @@ def get_session():
         'X-Time-Zone': 'GMT+03',
         'Origin': SITE_URL,
         'Referer': f'{SITE_URL}/fr/admin/report/pendingrequestrefill',
+        'Cookie': SITE_COOKIE,
     })
-
-    # Essayer plusieurs endpoints de login
-    login_endpoints = [
-        {'url': f'{SITE_URL}/api/auth/login', 'data': {'username': SITE_USERNAME, 'password': SITE_PASSWORD}},
-        {'url': f'{SITE_URL}/api/login', 'data': {'username': SITE_USERNAME, 'password': SITE_PASSWORD}},
-        {'url': f'{SITE_URL}/api/auth/signin', 'data': {'login': SITE_USERNAME, 'password': SITE_PASSWORD}},
-        {'url': f'{SITE_URL}/fr/api/auth/login', 'data': {'username': SITE_USERNAME, 'password': SITE_PASSWORD}},
-    ]
-
-    for ep in login_endpoints:
-        try:
-            resp = session.post(ep['url'], json=ep['data'], timeout=20)
-            logger.info(f"Login {ep['url']}: {resp.status_code} - {resp.text[:150]}")
-            if resp.status_code in (200, 201):
-                try:
-                    data = resp.json()
-                    token = (data.get('token') or data.get('access_token') or
-                             (data.get('data') or {}).get('token'))
-                    if token:
-                        session.headers.update({'Authorization': f'Bearer {token}'})
-                    break
-                except Exception:
-                    # Pas de JSON = probablement cookie session
-                    break
-        except Exception as e:
-            logger.error(f"Login error {ep['url']}: {e}")
-            continue
-
     return session
 
 
