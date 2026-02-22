@@ -21,14 +21,9 @@ SITE_URL = 'https://my-managment.com'
 
 
 def extraire_infos_sms(contenu):
-    """Extrait Transfer ID, montant, numéro et nom depuis le SMS WAAFI."""
-    infos = {
-        'transfer_id': None,
-        'montant': None,
-        'montant_num': None,
-        'numero_envoyeur': None,
-        'nom_envoyeur': None,
-    }
+    infos = {'transfer_id': None, 'montant': None, 'montant_num': None,
+              'numero_envoyeur': None, 'nom_envoyeur': None}
+
     m = re.search(r'Transfer-Id[:\s]+(\d+)', contenu, re.IGNORECASE)
     if m:
         infos['transfer_id'] = m.group(1)
@@ -49,7 +44,7 @@ def extraire_infos_sms(contenu):
 
 
 def get_session():
-    """Crée une session authentifiée sur my-managment.com."""
+    """Crée une session authentifiée — utilise les cookies comme un vrai navigateur."""
     session = requests.Session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0',
@@ -61,94 +56,78 @@ def get_session():
         'Referer': f'{SITE_URL}/fr/admin/report/pendingrequestrefill',
     })
 
-    try:
-        login_resp = session.post(
-            f'{SITE_URL}/api/auth/login',
-            json={'username': SITE_USERNAME, 'password': SITE_PASSWORD},
-            timeout=20
-        )
-        logger.info(f"Login: {login_resp.status_code} - {login_resp.text[:100]}")
+    # Essayer plusieurs endpoints de login
+    login_endpoints = [
+        {'url': f'{SITE_URL}/api/auth/login', 'data': {'username': SITE_USERNAME, 'password': SITE_PASSWORD}},
+        {'url': f'{SITE_URL}/api/login', 'data': {'username': SITE_USERNAME, 'password': SITE_PASSWORD}},
+        {'url': f'{SITE_URL}/api/auth/signin', 'data': {'login': SITE_USERNAME, 'password': SITE_PASSWORD}},
+        {'url': f'{SITE_URL}/fr/api/auth/login', 'data': {'username': SITE_USERNAME, 'password': SITE_PASSWORD}},
+    ]
 
-        if login_resp.status_code not in (200, 201):
-            for endpoint in [
-                f'{SITE_URL}/api/login',
-                f'{SITE_URL}/api/v1/auth/login',
-            ]:
-                login_resp = session.post(
-                    endpoint,
-                    json={'username': SITE_USERNAME, 'password': SITE_PASSWORD},
-                    timeout=20
-                )
-                if login_resp.status_code in (200, 201):
-                    break
-
+    for ep in login_endpoints:
         try:
-            login_data = login_resp.json()
-            token = (
-                login_data.get('token') or
-                login_data.get('access_token') or
-                login_data.get('data', {}).get('token')
-            )
-            if token:
-                session.headers.update({'Authorization': f'Bearer {token}'})
-        except Exception:
-            pass
-
-    except Exception as e:
-        logger.error(f"Erreur login: {e}")
+            resp = session.post(ep['url'], json=ep['data'], timeout=20)
+            logger.info(f"Login {ep['url']}: {resp.status_code} - {resp.text[:150]}")
+            if resp.status_code in (200, 201):
+                try:
+                    data = resp.json()
+                    token = (data.get('token') or data.get('access_token') or
+                             (data.get('data') or {}).get('token'))
+                    if token:
+                        session.headers.update({'Authorization': f'Bearer {token}'})
+                    break
+                except Exception:
+                    # Pas de JSON = probablement cookie session
+                    break
+        except Exception as e:
+            logger.error(f"Login error {ep['url']}: {e}")
+            continue
 
     return session
 
 
 def verifier_et_confirmer_auto(transfer_id, montant, numero):
-    """
-    Vérifie et confirme AUTOMATIQUEMENT dès qu'un SMS est reçu.
-    1. Connexion sur my-managment.com
-    2. Cherche dans Pending deposit requests
-    3. Si correspond → appelle approvemoney automatiquement
-    """
+    """Vérifie dans Pending deposit requests et appelle approvemoney si ça correspond."""
     session = get_session()
+    montant_num = re.search(r'(\d+)', montant or '').group(1) if montant else None
 
     try:
-        # Récupérer les pending deposits
+        # Récupérer les transactions pending
         transactions = []
         endpoints_deposits = [
             f'{SITE_URL}/api/payment/pending-deposits',
             f'{SITE_URL}/api/deposits/pending',
             f'{SITE_URL}/api/v1/deposits/pending',
-            f'{SITE_URL}/api/banktransfer/pending',
+            f'{SITE_URL}/fr/api/payment/pending-deposits',
             f'{SITE_URL}/admin/banktransfer/pendingrequestrefill',
+            f'{SITE_URL}/api/banktransfer/list?status=pending',
         ]
 
         for endpoint in endpoints_deposits:
             try:
                 resp = session.get(endpoint, timeout=20)
-                logger.info(f"Deposits {endpoint}: {resp.status_code} - {resp.text[:200]}")
-                if resp.status_code == 200:
-                    try:
-                        data = resp.json()
-                        if isinstance(data, list) and len(data) > 0:
-                            transactions = data
-                            break
-                        elif isinstance(data, dict):
-                            for key in ['data', 'items', 'transactions', 'deposits', 'list', 'results']:
-                                if key in data and isinstance(data[key], list) and len(data[key]) > 0:
-                                    transactions = data[key]
-                                    break
-                        if transactions:
-                            break
-                    except Exception:
-                        pass
+                logger.info(f"GET {endpoint}: {resp.status_code} content-type={resp.headers.get('content-type','')}")
+                ct = resp.headers.get('content-type', '')
+                if resp.status_code == 200 and 'json' in ct:
+                    data = resp.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        transactions = data
+                        break
+                    elif isinstance(data, dict):
+                        for key in ['data', 'items', 'transactions', 'deposits', 'list', 'results']:
+                            if key in data and isinstance(data[key], list) and len(data[key]) > 0:
+                                transactions = data[key]
+                                break
+                    if transactions:
+                        break
             except Exception as e:
-                logger.error(f"Erreur {endpoint}: {e}")
+                logger.error(f"Error {endpoint}: {e}")
                 continue
 
         if not transactions:
-            return False, "Aucune transaction récupérée du site", {}
+            return False, f"⚠️ Connexion réussie mais aucune transaction récupérée — vérifiez les logs Render", {}
 
-        # Chercher la transaction correspondante
-        montant_num = re.search(r'(\d+)', montant or '').group(1) if montant else None
-
+        # Chercher la correspondance
         for t in transactions:
             t_str = json.dumps(t, ensure_ascii=False).lower()
             transfer_match = transfer_id and str(transfer_id) in t_str
@@ -156,23 +135,16 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
             numero_match = numero and str(numero) in t_str
 
             if transfer_match or (montant_match and numero_match):
-                # Récupérer les infos nécessaires pour approvemoney
-                transaction_id = (
-                    t.get('id') or t.get('transaction_id') or
-                    t.get('ID') or t.get('_id')
-                )
-                summa = (
-                    t.get('summa') or t.get('amount') or
-                    t.get('montant') or montant_num or '0'
-                )
+                transaction_id = (t.get('id') or t.get('transaction_id') or t.get('ID'))
+                summa = t.get('summa') or t.get('amount') or montant_num or '0'
                 report_id = t.get('report_id') or t.get('reportId') or ''
                 subagent_id = t.get('subagent_id', 34883)
                 currency = t.get('currency', 227)
 
                 if not transaction_id:
-                    return True, "Transaction trouvée mais ID manquant", t
+                    return True, "Transaction trouvée mais ID manquant pour confirmer", t
 
-                # Appel automatique à approvemoney
+                # Appel approvemoney
                 approve_resp = session.post(
                     f'{SITE_URL}/admin/banktransfer/approvemoney',
                     data={
@@ -187,15 +159,14 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
                     },
                     timeout=20
                 )
-
                 logger.info(f"Approvemoney: {approve_resp.status_code} - {approve_resp.text[:200]}")
 
                 if approve_resp.status_code == 200:
-                    return True, f"✅ Confirmé automatiquement ! ID:{transaction_id} Montant:{summa}", t
+                    return True, f"✅ Confirmé ! ID:{transaction_id} Montant:{summa}", t
                 else:
                     return False, f"Transaction trouvée mais erreur confirmation: {approve_resp.status_code}", t
 
-        return False, f"❌ Pas de correspondance. Transfer-ID:{transfer_id} Montant:{montant_num} Numéro:{numero} ({len(transactions)} transactions)", {}
+        return False, f"❌ Aucune correspondance. Transfer-ID:{transfer_id} Montant:{montant_num} Numéro:{numero} ({len(transactions)} transactions vérifiées)", {}
 
     except Exception as e:
         logger.error(f"Erreur: {e}")
@@ -204,10 +175,6 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
 
 @csrf_exempt
 def webhook_recevoir_sms(request):
-    """
-    Webhook - reçoit le SMS, extrait les infos ET vérifie/confirme AUTOMATIQUEMENT.
-    Pas besoin de cliquer sur quoi que ce soit !
-    """
     data = {}
     data.update(request.GET.dict())
     if request.method == 'POST':
@@ -227,31 +194,21 @@ def webhook_recevoir_sms(request):
 
     logger.info(f"[WEBHOOK] donnees={json.dumps(data, ensure_ascii=False)[:500]}")
 
-    expediteur = (
-        data.get('from') or data.get('sender') or data.get('number') or
-        data.get('phone') or 'Inconnu'
-    )
+    expediteur = (data.get('from') or data.get('sender') or data.get('number') or 'Inconnu')
     if expediteur and expediteur.startswith('{'):
         expediteur = 'Inconnu'
 
-    contenu = (
-        data.get('message') or data.get('msg') or data.get('body') or
-        data.get('text') or data.get('sms') or data.get('key') or ''
-    )
+    contenu = (data.get('message') or data.get('msg') or data.get('body') or
+               data.get('text') or data.get('sms') or data.get('key') or '')
     if contenu and contenu.startswith('{'):
         contenu = ''
     if not contenu:
         contenu = f"[Données: {json.dumps(data, ensure_ascii=False)}]"
 
-    # Extraire les infos du SMS WAAFI
     infos = extraire_infos_sms(contenu)
+    ip_source = (request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or
+                 request.META.get('REMOTE_ADDR'))
 
-    ip_source = (
-        request.META.get('HTTP_X_FORWARDED_FOR', '').split(',')[0].strip() or
-        request.META.get('REMOTE_ADDR')
-    )
-
-    # Sauvegarder le SMS
     msg = Message.objects.create(
         expediteur=str(expediteur)[:50],
         contenu=contenu,
@@ -263,18 +220,15 @@ def webhook_recevoir_sms(request):
         statut_verification='non_verifie',
     )
 
-    # Si c'est un SMS WAAFI avec Transfer-ID → vérifier et confirmer automatiquement
+    # Vérification et confirmation AUTOMATIQUE si SMS WAAFI
     if infos.get('transfer_id') or infos.get('numero_envoyeur'):
-        logger.info(f"SMS WAAFI détecté - vérification automatique...")
-        correspond, details, donnees_site = verifier_et_confirmer_auto(
-            infos.get('transfer_id'),
-            infos.get('montant'),
-            infos.get('numero_envoyeur')
+        logger.info(f"SMS WAAFI — vérification automatique Transfer-ID:{infos.get('transfer_id')}")
+        correspond, details, _ = verifier_et_confirmer_auto(
+            infos.get('transfer_id'), infos.get('montant'), infos.get('numero_envoyeur')
         )
         msg.statut_verification = 'correspond' if correspond else 'non_trouve'
         msg.details_verification = details
         msg.save(update_fields=['statut_verification', 'details_verification'])
-        logger.info(f"Résultat auto: correspond={correspond} details={details}")
 
     return JsonResponse({'status': 'ok', 'id': msg.id}, status=201)
 
@@ -285,13 +239,9 @@ def dashboard(request):
     filtre_expediteur = request.GET.get('expediteur', '')
     if filtre_expediteur:
         messages_qs = messages_qs.filter(expediteur__icontains=filtre_expediteur)
-    filtre_non_lu = request.GET.get('non_lu', '')
-    if filtre_non_lu:
-        messages_qs = messages_qs.filter(lu=False)
     total = Message.objects.count()
     non_lus = Message.objects.filter(lu=False).count()
-    if not filtre_expediteur and not filtre_non_lu:
-        Message.objects.filter(lu=False).update(lu=True)
+    Message.objects.filter(lu=False).update(lu=True)
     expediteurs = Message.objects.values_list('expediteur', flat=True).distinct()
     context = {
         'messages': messages_qs[:200],
@@ -299,7 +249,6 @@ def dashboard(request):
         'non_lus': non_lus,
         'expediteurs': expediteurs,
         'filtre_expediteur': filtre_expediteur,
-        'filtre_non_lu': filtre_non_lu,
         'webhook_url': 'https://sms-receiver-0a3f.onrender.com/webhook/sms/',
     }
     return render(request, 'sms/dashboard.html', context)
