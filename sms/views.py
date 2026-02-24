@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 SITE_URL = 'https://my-managment.com'
 # Cookie de session - à mettre à jour si expiré
-SITE_COOKIE = 'lng=fr; auid=U5PNZGmcZmNZvzV4A9JlAg==; PHPSESSID=0d2e2cb1067c50479dbb49204e8e0851'
+SITE_COOKIE = 'lng=fr; auid=U5PNZGmcZmNZvzV4A9JlAg==; PHPSESSID=16d07f0b83e74a014047fb48e408913b'
 
 
 def extraire_infos_sms(contenu):
@@ -50,6 +50,7 @@ def get_session():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'fr,fr-FR;q=0.9,en;q=0.8',
+        'Content-Type': 'application/json',
         'X-Requested-With': 'XMLHttpRequest',
         'X-Time-Zone': 'GMT+03',
         'Origin': SITE_URL,
@@ -67,25 +68,50 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
     try:
         # Récupérer les transactions pending
         transactions = []
-        # POST vers pendingrequestrefill avec init:1
+        # Étape 1: init=1 pour obtenir report_id
+        report_id = '6e375701bec048eaf2a01f7ad819b6fd'
         try:
-            resp = session.post(
+            resp_init = session.post(
                 f'{SITE_URL}/admin/report/pendingrequestrefill',
                 json={'init': 1},
                 timeout=20
             )
-            logger.info(f"pendingrequestrefill: {resp.status_code} - {resp.text[:300]}")
+            logger.info(f"init: {resp_init.status_code} ct={resp_init.headers.get('content-type','')}")
+            if resp_init.status_code == 200 and 'json' in resp_init.headers.get('content-type',''):
+                init_data = resp_init.json()
+                rid = (init_data.get('params') or {}).get('report_id')
+                if rid:
+                    report_id = rid
+                    logger.info(f"report_id: {report_id}")
+        except Exception as e:
+            logger.error(f"Error init: {e}")
+
+        # Étape 2: récupérer les transactions avec le bon body
+        try:
+            from datetime import datetime
+            date_from = datetime.now().strftime('%Y-%m')
+            resp = session.post(
+                f'{SITE_URL}/admin/report/pendingrequestrefill',
+                json={
+                    'date_from': date_from,
+                    'subagent_id': None,
+                    'bank_id': None,
+                    'ref_ids': None,
+                    'currencyId': None,
+                },
+                timeout=20
+            )
+            logger.info(f"transactions: {resp.status_code} - {resp.text[:400]}")
             ct = resp.headers.get('content-type', '')
             if resp.status_code == 200 and 'json' in ct:
                 data = resp.json()
-                # Structure exacte: {data: [...], success: true}
                 if isinstance(data, dict) and 'data' in data:
                     transactions = data['data']
                     logger.info(f"{len(transactions)} transactions récupérées")
                 elif isinstance(data, list):
                     transactions = data
         except Exception as e:
-            logger.error(f"Error pendingrequestrefill: {e}")
+            logger.error(f"Error transactions: {e}")
 
         if not transactions:
             return False, f"⚠️ Connexion réussie mais aucune transaction récupérée — vérifiez les logs Render", {}
