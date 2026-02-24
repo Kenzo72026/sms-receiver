@@ -1,4 +1,4 @@
-import json
+    import json
 import logging
 import re
 import requests
@@ -222,25 +222,39 @@ def webhook_recevoir_sms(request):
         statut_verification='non_verifie',
     )
 
-    # Vérification et confirmation AUTOMATIQUE si SMS WAAFI
+    # Vérification et confirmation AUTOMATIQUE si SMS WAAFI — en thread séparé
     if infos.get('transfer_id') or infos.get('numero_envoyeur'):
-        import time
+        import threading, time
         transfer_id_val = infos.get('transfer_id')
-        logger.info(f"SMS WAAFI — vérification automatique Transfer-ID:{transfer_id_val}")
-        correspond = False
-        details = 'Non vérifié'
-        for attempt in range(18):  # 18 x 10s = 3 minutes
-            logger.info(f"Tentative {attempt+1}/18 Transfer-ID:{transfer_id_val}")
-            correspond, details, _ = verifier_et_confirmer_auto(
-                transfer_id_val, infos.get('montant'), infos.get('numero_envoyeur')
+        montant_val = infos.get('montant')
+        numero_val = infos.get('numero_envoyeur')
+        msg_id = msg.id
+
+        def verifier_en_background():
+            from .models import Message
+            logger.info(f"[BG] Début vérification Transfer-ID:{transfer_id_val}")
+            for attempt in range(18):  # 18 x 10s = 3 minutes
+                logger.info(f"[BG] Tentative {attempt+1}/18 Transfer-ID:{transfer_id_val}")
+                correspond, details, _ = verifier_et_confirmer_auto(
+                    transfer_id_val, montant_val, numero_val
+                )
+                if correspond:
+                    Message.objects.filter(id=msg_id).update(
+                        statut_verification='correspond',
+                        details_verification=details
+                    )
+                    logger.info(f"[BG] ✅ Confirmé! Transfer-ID:{transfer_id_val}")
+                    return
+                if attempt < 17:
+                    time.sleep(10)
+            Message.objects.filter(id=msg_id).update(
+                statut_verification='non_trouve',
+                details_verification=f'Non trouvé après 3 minutes'
             )
-            if correspond:
-                break
-            if attempt < 17:
-                time.sleep(10)
-        msg.statut_verification = 'correspond' if correspond else 'non_trouve'
-        msg.details_verification = details
-        msg.save(update_fields=['statut_verification', 'details_verification'])
+            logger.info(f"[BG] ❌ Non trouvé après 3 min Transfer-ID:{transfer_id_val}")
+
+        t = threading.Thread(target=verifier_en_background, daemon=True)
+        t.start()
 
     return JsonResponse({'status': 'ok', 'id': msg.id}, status=201)
 
