@@ -130,11 +130,10 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
             t_summa = str(t.get('Summa', '') or t.get('summa', ''))
 
             transfer_match = transfer_id and t_transfer_id == str(transfer_id)
-            montant_match = montant_num and t_summa == str(montant_num)
 
-            logger.info(f"Comparaison: SMS transfer={transfer_id} vs site={t_transfer_id} | SMS montant={montant_num} vs site={t_summa}")
+            logger.info(f"Comparaison: SMS transfer={transfer_id} vs site={t_transfer_id}")
 
-            if transfer_match and montant_match:
+            if transfer_match:
                 # Récupérer les données de confirmation directement depuis confirm[0].data
                 confirm_data = {}
                 if t.get('confirm') and len(t['confirm']) > 0:
@@ -225,10 +224,20 @@ def webhook_recevoir_sms(request):
 
     # Vérification et confirmation AUTOMATIQUE si SMS WAAFI
     if infos.get('transfer_id') or infos.get('numero_envoyeur'):
-        logger.info(f"SMS WAAFI — vérification automatique Transfer-ID:{infos.get('transfer_id')}")
-        correspond, details, _ = verifier_et_confirmer_auto(
-            infos.get('transfer_id'), infos.get('montant'), infos.get('numero_envoyeur')
-        )
+        import time
+        transfer_id_val = infos.get('transfer_id')
+        logger.info(f"SMS WAAFI — vérification automatique Transfer-ID:{transfer_id_val}")
+        correspond = False
+        details = 'Non vérifié'
+        for attempt in range(18):  # 18 x 10s = 3 minutes
+            logger.info(f"Tentative {attempt+1}/18 Transfer-ID:{transfer_id_val}")
+            correspond, details, _ = verifier_et_confirmer_auto(
+                transfer_id_val, infos.get('montant'), infos.get('numero_envoyeur')
+            )
+            if correspond:
+                break
+            if attempt < 17:
+                time.sleep(10)
         msg.statut_verification = 'correspond' if correspond else 'non_trouve'
         msg.details_verification = details
         msg.save(update_fields=['statut_verification', 'details_verification'])
