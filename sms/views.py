@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 SITE_URL = 'https://my-managment.com'
 # Cookie de session - à mettre à jour si expiré
-SITE_COOKIE = 'lng=fr; auid=U5PNZGmZkZ07s+1QAwaPAg==; PHPSESSID=c81f6b610bfd21d6fd3e7d842dc5e0df'
+SITE_COOKIE = 'lng=fr; auid=U5PNZGmcZmNZvzV4A9JlAg==; PHPSESSID=0d2e2cb1067c50479dbb49204e8e0851'
 
 
 def extraire_infos_sms(contenu):
@@ -67,7 +67,7 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
     try:
         # Récupérer les transactions pending
         transactions = []
-        # URL exacte trouvée dans Network — POST avec body {init: 1}
+        # POST vers pendingrequestrefill avec init:1
         try:
             resp = session.post(
                 f'{SITE_URL}/admin/report/pendingrequestrefill',
@@ -78,35 +78,48 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
             ct = resp.headers.get('content-type', '')
             if resp.status_code == 200 and 'json' in ct:
                 data = resp.json()
-                if isinstance(data, list):
+                # Structure exacte: {data: [...], success: true}
+                if isinstance(data, dict) and 'data' in data:
+                    transactions = data['data']
+                    logger.info(f"{len(transactions)} transactions récupérées")
+                elif isinstance(data, list):
                     transactions = data
-                elif isinstance(data, dict):
-                    for key in ['data', 'items', 'transactions', 'deposits', 'list', 'results']:
-                        if key in data and isinstance(data[key], list):
-                            transactions = data[key]
-                            break
         except Exception as e:
             logger.error(f"Error pendingrequestrefill: {e}")
 
         if not transactions:
             return False, f"⚠️ Connexion réussie mais aucune transaction récupérée — vérifiez les logs Render", {}
 
-        # Chercher la correspondance
+        # Chercher la correspondance dans data
         for t in transactions:
-            t_str = json.dumps(t, ensure_ascii=False).lower()
-            # Vérification uniquement sur Transfer-ID ET Montant
-            transfer_match = transfer_id and str(transfer_id) in t_str
-            montant_match = montant_num and montant_num in t_str
+            # Extraire le Transfer-ID depuis dopparam
+            t_transfer_id = None
+            dopparam = t.get('dopparam', [])
+            if isinstance(dopparam, list):
+                for dp in dopparam:
+                    if 'Transfer-ID' in dp.get('title', ''):
+                        t_transfer_id = str(dp.get('description', ''))
+                        break
+
+            t_summa = str(t.get('Summa', '') or t.get('summa', ''))
+
+            transfer_match = transfer_id and t_transfer_id == str(transfer_id)
+            montant_match = montant_num and t_summa == str(montant_num)
+
+            logger.info(f"Comparaison: SMS transfer={transfer_id} vs site={t_transfer_id} | SMS montant={montant_num} vs site={t_summa}")
 
             if transfer_match and montant_match:
-                transaction_id = (t.get('id') or t.get('transaction_id') or t.get('ID'))
-                summa = t.get('summa') or t.get('amount') or montant_num or '0'
-                report_id = t.get('report_id') or t.get('reportId') or ''
-                subagent_id = t.get('subagent_id', 34883)
-                currency = t.get('currency', 227)
+                # Récupérer les données de confirmation directement depuis confirm[0].data
+                confirm_data = {}
+                if t.get('confirm') and len(t['confirm']) > 0:
+                    confirm_data = t['confirm'][0].get('data', {})
 
-                if not transaction_id:
-                    return True, "Transaction trouvée mais ID manquant pour confirmer", t
+                transaction_id = confirm_data.get('id') or t.get('id')
+                summa = confirm_data.get('summa') or montant_num
+                subagent_id = confirm_data.get('subagent_id', 34883)
+                currency = confirm_data.get('currency', 227)
+
+                logger.info(f"Transaction trouvée! id={transaction_id} summa={summa} subagent={subagent_id}")
 
                 # Appel approvemoney
                 approve_resp = session.post(
@@ -117,7 +130,7 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
                         'summa_user': summa,
                         'comment': '',
                         'is_out': 'false',
-                        'report_id': report_id,
+                        'report_id': '',
                         'subagent_id': subagent_id,
                         'currency': currency,
                     },
@@ -128,9 +141,9 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
                 if approve_resp.status_code == 200:
                     return True, f"✅ Confirmé ! ID:{transaction_id} Montant:{summa}", t
                 else:
-                    return False, f"Transaction trouvée mais erreur confirmation: {approve_resp.status_code}", t
+                    return False, f"Transaction trouvée mais erreur confirmation: {approve_resp.status_code} - {approve_resp.text[:100]}", t
 
-        return False, f"❌ Aucune correspondance. Transfer-ID:{transfer_id} Montant:{montant_num} Numéro:{numero} ({len(transactions)} transactions vérifiées)", {}
+        return False, f"❌ Aucune correspondance. Transfer-ID:{transfer_id} Montant:{montant_num} ({len(transactions)} transactions vérifiées)", {}
 
     except Exception as e:
         logger.error(f"Erreur: {e}")
