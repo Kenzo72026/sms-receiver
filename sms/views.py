@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 SITE_URL = 'https://my-managment.com'
 # Cookie de session - à mettre à jour si expiré
-SITE_COOKIE = 'lng=fr; auid=U5PNZGmcZmNZvzV4A9JlAg==; PHPSESSID=16d07f0b83e74a014047fb48e408913b'
+SITE_COOKIE = 'lng=fr; auid=U5PNZGmfB50kj5wlAwWQAg==; PHPSESSID=491440e4191a89a96df7cca100838dd4'
 
 
 def extraire_infos_sms(contenu):
@@ -118,14 +118,15 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
 
         # Chercher la correspondance dans data
         for t in transactions:
-            # Extraire le Transfer-ID depuis dopparam
+            # Extraire le Transfer-ID depuis dopparam[0].description directement
             t_transfer_id = None
             dopparam = t.get('dopparam', [])
-            if isinstance(dopparam, list):
-                for dp in dopparam:
-                    if 'Transfer-ID' in dp.get('title', ''):
-                        t_transfer_id = str(dp.get('description', ''))
-                        break
+            if isinstance(dopparam, list) and len(dopparam) > 0:
+                first = dopparam[0]
+                desc = first.get('description', '')
+                if isinstance(desc, str) and desc.strip():
+                    t_transfer_id = desc.strip()
+            logger.info(f"Transfer-ID extrait: {t_transfer_id}")
 
             t_summa = str(t.get('Summa', '') or t.get('summa', ''))
 
