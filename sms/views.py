@@ -159,7 +159,7 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
 
                 logger.info(f"Transaction trouvée! id={transaction_id} summa={summa} subagent={subagent_id}")
 
-                # Appel approvemoney
+                # Appel approvemoney - multipart/form-data exact comme le navigateur
                 approve_resp = session.post(
                     f'{SITE_URL}/admin/banktransfer/approvemoney',
                     data={
@@ -168,9 +168,15 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
                         'summa_user': summa,
                         'comment': '',
                         'is_out': 'false',
-                        'report_id': '',
+                        'report_id': '6e375701bec048eaf2a01f7ad819b6fd',
                         'subagent_id': subagent_id,
                         'currency': currency,
+                    },
+                    headers={
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-Time-Zone': 'GMT+03',
+                        'Origin': 'https://my-managment.com',
+                        'Referer': 'https://my-managment.com/fr/admin/report/pendingrequestrefill',
                     },
                     timeout=20
                 )
