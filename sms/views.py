@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 import re
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 SITE_URL = 'https://my-managment.com'
 # Cookie de session - à mettre à jour si expiré
-SITE_COOKIE = 'lng=fr; auid=U5PNZGmhb62L/dMCAwWZAg==; PHPSESSID=8f5b19f37238566aa88692245a7df60f'
+SITE_COOKIE = os.environ.get('SITE_COOKIE', 'lng=fr; auid=U5PNZGmhb62L/dMCAwWZAg==; PHPSESSID=8f5b19f37238566aa88692245a7df60f')
 
 
 def extraire_infos_sms(contenu):
@@ -234,7 +235,7 @@ def webhook_recevoir_sms(request):
         def verifier_en_background():
             from .models import Message
             logger.info(f"[BG] Début vérification Transfer-ID:{transfer_id_val}")
-            for attempt in range(18):  # 18 x 10s = 3 minutes
+            for attempt in range(60):  # 60 x 10s = 10 minutes
                 logger.info(f"[BG] Tentative {attempt+1}/18 Transfer-ID:{transfer_id_val}")
                 correspond, details, _ = verifier_et_confirmer_auto(
                     transfer_id_val, montant_val, numero_val
@@ -246,11 +247,11 @@ def webhook_recevoir_sms(request):
                     )
                     logger.info(f"[BG] ✅ Confirmé! Transfer-ID:{transfer_id_val}")
                     return
-                if attempt < 17:
+                if attempt < 59:
                     time.sleep(10)
             Message.objects.filter(id=msg_id).update(
                 statut_verification='non_trouve',
-                details_verification=f'Non trouvé après 3 minutes'
+                details_verification=f'Non trouvé après 10 minutes'
             )
             logger.info(f"[BG] ❌ Non trouvé après 3 min Transfer-ID:{transfer_id_val}")
 
