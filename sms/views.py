@@ -73,7 +73,7 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
         report_id = '6e375701bec048eaf2a01f7ad819b6fd'
         try:
             resp_init = session.post(
-                f'{SITE_URL}/admin/report/pendingrequestrefill',
+                f'{SITE_URL}/fr/admin/report/pendingrequestrefill',
                 json={'init': 1},
                 timeout=20
             )
@@ -92,7 +92,7 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
             from datetime import datetime
             date_from = datetime.now().strftime('%Y-%m')
             resp = session.post(
-                f'{SITE_URL}/admin/report/pendingrequestrefill',
+                f'{SITE_URL}/fr/admin/report/pendingrequestrefill',
                 json={
                     'date_from': date_from,
                     'subagent_id': None,
@@ -161,7 +161,7 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
 
                 # Appel approvemoney - multipart/form-data exact comme le navigateur
                 approve_resp = session.post(
-                    f'{SITE_URL}/admin/banktransfer/approvemoney',
+                    f'{SITE_URL}/fr/admin/banktransfer/approvemoney',
                     data={
                         'id': transaction_id,
                         'summa': summa,
@@ -182,10 +182,17 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
                 )
                 logger.info(f"Approvemoney: {approve_resp.status_code} - {approve_resp.text[:200]}")
 
-                if approve_resp.status_code == 200:
-                    return True, f"✅ Confirmé ! ID:{transaction_id} Montant:{summa}", t
-                else:
-                    return False, f"Transaction trouvée mais erreur confirmation: {approve_resp.status_code} - {approve_resp.text[:100]}", t
+                try:
+                    approve_json = approve_resp.json()
+                    if approve_json.get('success') == True:
+                        return True, f"✅ Confirmé ! ID:{transaction_id} Montant:{summa}", t
+                    else:
+                        logger.error(f"Approvemoney échec: {approve_resp.text[:200]}")
+                        return False, f"Erreur confirmation: {approve_resp.text[:100]}", t
+                except Exception:
+                    if approve_resp.status_code == 200:
+                        return True, f"✅ Confirmé ! ID:{transaction_id} Montant:{summa}", t
+                    return False, f"Erreur: {approve_resp.status_code} - {approve_resp.text[:100]}", t
 
         return False, f"❌ Aucune correspondance. Transfer-ID:{transfer_id} Montant:{montant_num} ({len(transactions)} transactions vérifiées)", {}
 
