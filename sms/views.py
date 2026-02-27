@@ -328,7 +328,6 @@ def supprimer_message(request, pk):
     return JsonResponse({'status': 'ok'})
 
 
-@login_required
 def api_messages(request):
     depuis_id = request.GET.get('depuis_id', 0)
     msgs = Message.objects.filter(id__gt=depuis_id).values(
