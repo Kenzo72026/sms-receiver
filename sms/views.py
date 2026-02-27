@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 SITE_URL = 'https://my-managment.com'
 # Cookie de session - à mettre à jour si expiré
-SITE_COOKIE = 'lng=fr; auid=U5PNZGmfB50kj5wlAwWQAg==; PHPSESSID=491440e4191a89a96df7cca100838dd4'
+SITE_COOKIE = 'lng=fr; auid=U5PNZGmhb62L/dMCAwWZAg==; PHPSESSID=8f5b19f37238566aa88692245a7df60f'
 
 
 def extraire_infos_sms(contenu):
