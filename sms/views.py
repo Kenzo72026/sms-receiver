@@ -161,7 +161,7 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
 
                 # Appel approvemoney - multipart/form-data exact comme le navigateur
                 approve_resp = session.post(
-                    f'{SITE_URL}/fr/admin/banktransfer/approvemoney',
+                    f'{SITE_URL}/admin/banktransfer/approvemoney',
                     data={
                         'id': transaction_id,
                         'summa': summa,
@@ -173,10 +173,16 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
                         'currency': currency,
                     },
                     headers={
-                        'X-Requested-With': 'XMLHttpRequest',
-                        'X-Time-Zone': 'GMT+03',
+                        'Accept': 'application/json, text/plain, */*',
+                        'Accept-Language': 'fr,fr-FR;q=0.9,en;q=0.8',
                         'Origin': 'https://my-managment.com',
                         'Referer': 'https://my-managment.com/fr/admin/report/pendingrequestrefill',
+                        'Sec-Fetch-Dest': 'empty',
+                        'Sec-Fetch-Mode': 'cors',
+                        'Sec-Fetch-Site': 'same-origin',
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36 Edg/145.0.0.0',
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-Time-Zone': 'GMT+03',
                     },
                     timeout=20
                 )
