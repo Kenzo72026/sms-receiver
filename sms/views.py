@@ -119,23 +119,34 @@ def verifier_et_confirmer_auto(transfer_id, montant, numero):
 
         # Chercher la correspondance dans data
         for t in transactions:
-            # Extraire le Transfer-ID depuis dopparam[0].description directement
+            # Extraire Transfer-ID (dopparam[0]) et numéro (dopparam[1])
             t_transfer_id = None
+            t_numero = None
             dopparam = t.get('dopparam', [])
-            if isinstance(dopparam, list) and len(dopparam) > 0:
-                first = dopparam[0]
-                desc = first.get('description', '')
-                if isinstance(desc, str) and desc.strip():
-                    t_transfer_id = desc.strip()
-            logger.info(f"Transfer-ID extrait: {t_transfer_id}")
+            if isinstance(dopparam, list):
+                if len(dopparam) > 0:
+                    desc0 = dopparam[0].get('description', '')
+                    if isinstance(desc0, str):
+                        t_transfer_id = desc0.strip()
+                if len(dopparam) > 1:
+                    desc1 = dopparam[1].get('description', '')
+                    if isinstance(desc1, str):
+                        t_numero = desc1.strip()  # ex: 25377166506
+            logger.info(f"Transfer-ID extrait: {t_transfer_id} | Numéro extrait: {t_numero}")
 
             t_summa = str(t.get('Summa', '') or t.get('summa', ''))
 
             transfer_match = transfer_id and t_transfer_id == str(transfer_id)
 
-            logger.info(f"Comparaison: SMS transfer={transfer_id} vs site={t_transfer_id}")
+            # Numéro SMS = 77166506, site stocke 25377166506 → on vérifie si le numéro SMS est contenu dans le numéro site
+            numero_match = False
+            if numero and t_numero:
+                numero_clean = str(numero).strip()
+                numero_match = t_numero.endswith(numero_clean) or numero_clean in t_numero
 
-            if transfer_match:
+            logger.info(f"Comparaison: SMS transfer={transfer_id} vs site={t_transfer_id} | SMS numero={numero} vs site={t_numero} | transfer_match={transfer_match} numero_match={numero_match}")
+
+            if transfer_match or numero_match:
                 # Récupérer les données de confirmation directement depuis confirm[0].data
                 confirm_data = {}
                 if t.get('confirm') and len(t['confirm']) > 0:
