@@ -29,12 +29,13 @@ def extraire_infos_sms(contenu):
     if m:
         infos['transfer_id'] = m.group(1)
 
-    m = re.search(r'Received\s+([\w\s]+?)\s+from', contenu, re.IGNORECASE)
+    m = re.search(r'Received\s+([\w\s,]+?)\s+from', contenu, re.IGNORECASE)
     if m:
         infos['montant'] = m.group(1).strip()
-        num = re.search(r'(\d+)', infos['montant'])
+        # Extraire tous les chiffres et supprimer virgules/espaces ex: DJF 5,000 -> 5000
+        num = re.sub(r'[,\s]', '', re.sub(r'[^\d,]', '', infos['montant']))
         if num:
-            infos['montant_num'] = num.group(1)
+            infos['montant_num'] = num
 
     m = re.search(r'from\s+([A-Za-z\s]+)\((\d+)\)', contenu, re.IGNORECASE)
     if m:
